@@ -29,11 +29,17 @@ if [[ $SEAFILE_DEBUG != "" ]]; then
 fi
 set -e
 
-if [[ "$#" -ne 1 ]]; then
-    echo "You must specif Seafile version to install"
-    echo "Like: $0 4.4.2"
+if [[ "$#" -ne 2 ]]; then
+    echo "You must specif Seafile <admin_username> <full_domain_name>"
+    echo "Like: $0 admin@seafile.local myseafile.com"
     exit 1
 fi
+
+SEAFILE_ADMIN=$1
+IP_OR_DOMAIN=$2
+SEAFILE_VERSION="6.1.1"
+ZPOOL_NAME="MyDiskPool"
+ZFS_DATASET="MyData"
 
 clear
 cat <<EOF
@@ -99,9 +105,7 @@ echo
 # -------------------------------------------
 # Vars
 # -------------------------------------------
-SEAFILE_ADMIN=admin@seafile.local
-IP_OR_DOMAIN=127.0.0.1
-SEAFILE_VERSION=$1
+
 TIME_ZONE=Asia/Shanghai
 
 if is_pro; then
@@ -115,7 +119,7 @@ if is_pro; then
     INSTALLPATH=/opt/seafile/seafile-pro-server-${SEAFILE_VERSION}/
 else
     SEAFILE_SERVER_PACKAGE=seafile-server_${SEAFILE_VERSION}_x86-64.tar.gz
-    SEAFILE_SERVER_PACKAGE_URL=http://download-cn.seafile.com/${SEAFILE_SERVER_PACKAGE}
+    SEAFILE_SERVER_PACKAGE_URL=https://download.seadrive.org/${SEAFILE_SERVER_PACKAGE}
     INSTALLPATH=/opt/seafile/seafile-server-${SEAFILE_VERSION}/
 fi
 
@@ -142,14 +146,22 @@ fi
 apt-get update
 apt-get install -y python2.7 sudo python-pip python-setuptools python-imaging python-mysqldb python-ldap python-urllib3 \
 openjdk-8-jre memcached python-memcache pwgen curl openssl poppler-utils libpython2.7 libreoffice \
-libreoffice-script-provider-python ttf-wqy-microhei ttf-wqy-zenhei xfonts-wqy nginx python-requests
+libreoffice-script-provider-python ttf-wqy-microhei ttf-wqy-zenhei xfonts-wqy nginx python-requests zfs
+
+# -------------------------------------------
+# Create seafile-data with the help of ZFS
+# -------------------------------------------
+zpool create ${ZPOOL_NAME} /dev/sdc
+zpool set cachefile=/etc/zfs/zpool.cache ${ZPOOL_NAME}
+zfs create ${ZPOOL_NAME}/${ZFS_DATASET}
+zfs set compression=gzip ${ZPOOL_NAME}/${ZFS_DATASET}
 
 rm /etc/nginx/sites-enabled/*
 
 cat > /etc/nginx/sites-available/seafile.conf <<'EOF'
 server {
       listen 80;
-      server_name  "";
+      server_name  "${SEAFILE_ADMIN}";
 
       proxy_set_header X-Forwarded-For $remote_addr;
 
@@ -336,7 +348,12 @@ cd $INSTALLPATH
 # -------------------------------------------
 TOPDIR=$(dirname "${INSTALLPATH}")
 DEFAULT_CONF_DIR=${TOPDIR}/conf
-SEAFILE_DATA_DIR=${TOPDIR}/seafile-data
+
+if [[ ! -e /${ZPOOL_NAME}/${ZFS_DATASET}/seafile-data ]]; then
+   SEAFILE_DATA_DIR=/${ZPOOL_NAME}/${ZFS_DATASET}/seafile-data
+else
+   SEAFILE_DATA_DIR=/${ZPOOL_NAME}/${ZFS_DATASET}/seafile-data`date +%Y%m%d%H%M%S`
+fi
 DEST_SETTINGS_PY=${TOPDIR}/conf/seahub_settings.py
 
 mkdir -p ${DEFAULT_CONF_DIR}
