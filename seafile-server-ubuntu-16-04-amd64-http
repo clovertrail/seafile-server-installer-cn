@@ -19,6 +19,14 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
 #
+usage() {
+   echo "Usage: $0 [-u <admin_email>] [-d <full_domain>] [-p <admin_pass>] [-s <seafile_version>]"
+   echo "       admin_email is used to login seafile server, i.e. admin@seafile.local"
+   echo "       full_domain is the full qualified domain name, i.e. mybox.southeastasia.cloudapp.azure.com"
+   echo "       admin_pass is optional, if you do not specify it, a random string is generated"
+   echo "       seafile_version is optional, default 6.1.1 is used"
+   exit 1
+}
 
 if [[ $HOME == "" ]]; then
     export HOME=/root
@@ -29,18 +37,34 @@ if [[ $SEAFILE_DEBUG != "" ]]; then
 fi
 set -e
 
-if [[ "$#" -ne 2 ]]; then
-    echo "You must specif Seafile <admin_username> <full_domain_name>"
-    echo "Like: $0 admin@seafile.local myseafile.com"
-    exit 1
-fi
-
-SEAFILE_ADMIN=$1
-IP_OR_DOMAIN=$2
 SEAFILE_VERSION="6.1.1"
 SEAFILE_PRO=0
 ZPOOL_NAME="MyDiskPool"
 ZFS_DATASET="MyData"
+
+while getopts ":u:p:d:s:" o; do
+    case "${o}" in
+     u)
+       SEAFILE_ADMIN=${OPTARG}
+       ;;
+     p)
+       SEAFILE_ADMIN_PW=${OPTARG}
+       ;;
+     d)
+       IP_OR_DOMAIN=${OPTARG}
+       ;;
+     s)
+       SEAFILE_VERSION=${OPTARGS}
+       ;;
+     *)
+       usage
+       ;;
+    esac
+done
+shift $((OPTIND-1))
+if [ -z "${SEAFILE_ADMIN}" ] || [ -z "${IP_OR_DOMAIN}" ]; then
+   usage
+fi
 
 clear
 cat <<EOF
@@ -420,7 +444,7 @@ cp ${INSTALLPATH}/check_init_admin.py ${INSTALLPATH}/check_init_admin.py.backup
 # -------------------------------------------
 # Set admin credentials in check_init_admin.py
 # -------------------------------------------
-SEAFILE_ADMIN_PW=$(pwgen)
+SEAFILE_ADMIN_PW=${SEAFILE_ADMIN_PW:-$(pwgen)}
 eval "sed -i 's/= ask_admin_email()/= \"${SEAFILE_ADMIN}\"/' ${INSTALLPATH}/check_init_admin.py"
 eval "sed -i 's/= ask_admin_password()/= \"${SEAFILE_ADMIN_PW}\"/' ${INSTALLPATH}/check_init_admin.py"
 
