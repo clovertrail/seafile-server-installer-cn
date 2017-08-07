@@ -54,7 +54,7 @@ while getopts ":u:p:d:s:" o; do
        IP_OR_DOMAIN=${OPTARG}
        ;;
      s)
-       SEAFILE_VERSION=${OPTARGS}
+       SEAFILE_VERSION=${OPTARG}
        ;;
      *)
        usage
