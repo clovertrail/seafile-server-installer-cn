@@ -20,11 +20,10 @@
 #
 #
 usage() {
-   echo "Usage: $0 [-u <admin_email>] [-d <full_domain>] [-p <admin_pass>] [-s <seafile_version>]"
+   echo "Usage: $0 [-u <admin_email>] [-d <full_domain>] [-p <admin_pass>]"
    echo "       admin_email is used to login seafile server, i.e. admin@seafile.local"
    echo "       full_domain is the full qualified domain name, i.e. mybox.southeastasia.cloudapp.azure.com"
    echo "       admin_pass is optional, if you do not specify it, a random string is generated"
-   echo "       seafile_version is optional, default 6.1.1 is used"
    exit 1
 }
 
@@ -41,8 +40,10 @@ SEAFILE_VERSION="6.1.1"
 SEAFILE_PRO=0
 ZPOOL_NAME="MyDiskPool"
 ZFS_DATASET="MyData"
+INSTALL_ROOT=${ZPOOL_NAME}/${ZFS_DATASET}
+OPT_ROOT=/${INSTALL_ROOT}/opt
 
-while getopts ":u:p:d:s:" o; do
+while getopts ":u:p:d:" o; do
     case "${o}" in
      u)
        SEAFILE_ADMIN=${OPTARG}
@@ -52,9 +53,6 @@ while getopts ":u:p:d:s:" o; do
        ;;
      d)
        IP_OR_DOMAIN=${OPTARG}
-       ;;
-     s)
-       SEAFILE_VERSION=${OPTARG}
        ;;
      *)
        usage
@@ -133,19 +131,48 @@ echo
 
 TIME_ZONE=Asia/Shanghai
 
+# -------------------------------------------
+# Additional requirements
+# -------------------------------------------
+apt-get update
+apt-get install -y python2.7 sudo python-pip python-setuptools python-imaging python-mysqldb python-ldap python-urllib3 \
+openjdk-8-jre memcached python-memcache pwgen curl openssl poppler-utils libpython2.7 libreoffice \
+libreoffice-script-provider-python ttf-wqy-microhei ttf-wqy-zenhei xfonts-wqy nginx python-requests zfs
+
+# -------------------------------------------
+# Create seafile-data with the help of ZFS
+# -------------------------------------------
+a=`zpool list | grep ${ZPOOL_NAME} > /dev/null; echo $?`
+if [[ $a -ne 0 ]];
+then
+    zpool create -f ${ZPOOL_NAME} /dev/sdc
+    zpool set cachefile=/etc/zfs/zpool.cache ${ZPOOL_NAME}
+fi
+
+a=`zfs list | grep ${ZFS_DATASET} > /dev/null; echo $?`
+if [[ $a -ne 0 ]];
+then
+    zfs create ${INSTALL_ROOT}
+    zfs set compression=gzip ${INSTALL_ROOT}
+fi
+if [[ ! -d ${OPT_ROOT} ]]
+then
+    mkdir ${OPT_ROOT}
+fi
+
 if is_pro; then
     SEAFILE_SERVER_PACKAGE=seafile-pro-server_${SEAFILE_VERSION}_x86-64.tar.gz
-    if [[ ! -e /opt/$SEAFILE_SERVER_PACKAGE ]]; then
+    if [[ ! -e ${OPT_ROOT}/$SEAFILE_SERVER_PACKAGE ]]; then
         echo
-        echo "You must download \"$SEAFILE_SERVER_PACKAGE\" to the /opt/ folder before running this script!"
+        echo "You must download \"$SEAFILE_SERVER_PACKAGE\" to the ${OPT_ROOT} folder before running this script!"
         echo
         exit 1
     fi
-    INSTALLPATH=/opt/seafile/seafile-pro-server-${SEAFILE_VERSION}/
+    INSTALLPATH=${OPT_ROOT}/seafile/seafile-pro-server-${SEAFILE_VERSION}/
 else
     SEAFILE_SERVER_PACKAGE=seafile-server_${SEAFILE_VERSION}_x86-64.tar.gz
     SEAFILE_SERVER_PACKAGE_URL=https://download.seadrive.org/${SEAFILE_SERVER_PACKAGE}
-    INSTALLPATH=/opt/seafile/seafile-server-${SEAFILE_VERSION}/
+    INSTALLPATH=${OPT_ROOT}/seafile/seafile-server-${SEAFILE_VERSION}/
 fi
 
 
@@ -160,26 +187,10 @@ fi
 # -------------------------------------------
 # Abort if directory /opt/seafile/ exists
 # -------------------------------------------
-if [[ -d "/opt/seafile/" ]] ;
+if [[ -d "${OPT_ROOT}/seafile/" ]] ;
 then
-  echo "  Aborting because directory /opt/seafile/ already exist" ; exit 1
+  echo "  Aborting because directory ${OPT_ROOT}/seafile/ already exist" ; exit 1
 fi
-
-# -------------------------------------------
-# Additional requirements
-# -------------------------------------------
-apt-get update
-apt-get install -y python2.7 sudo python-pip python-setuptools python-imaging python-mysqldb python-ldap python-urllib3 \
-openjdk-8-jre memcached python-memcache pwgen curl openssl poppler-utils libpython2.7 libreoffice \
-libreoffice-script-provider-python ttf-wqy-microhei ttf-wqy-zenhei xfonts-wqy nginx python-requests zfs
-
-# -------------------------------------------
-# Create seafile-data with the help of ZFS
-# -------------------------------------------
-zpool create -f ${ZPOOL_NAME} /dev/sdc
-zpool set cachefile=/etc/zfs/zpool.cache ${ZPOOL_NAME}
-zfs create ${ZPOOL_NAME}/${ZFS_DATASET}
-zfs set compression=gzip ${ZPOOL_NAME}/${ZFS_DATASET}
 
 rm /etc/nginx/sites-enabled/*
 
@@ -214,10 +225,14 @@ server {
           proxy_connect_timeout  36000s;
           proxy_read_timeout  36000s;
       }
+EOF
+cat >> /etc/nginx/sites-available/seafile.conf << EOF
       location /media {
-          root /opt/seafile/seafile-server-latest/seahub;
+          root ${OPT_ROOT}/seafile/seafile-server-latest/seahub;
       }
-     location /seafdav {
+EOF
+cat >> /etc/nginx/sites-available/seafile.conf <<'EOF'
+    location /seafdav {
         fastcgi_pass    127.0.0.1:8080;
         fastcgi_param   SCRIPT_FILENAME     $document_root$fastcgi_script_name;
         fastcgi_param   PATH_INFO           $fastcgi_script_name;
@@ -262,6 +277,7 @@ else
 [client]
 user=root
 password=$SQLROOTPW
+datadir=${OPT_ROOT}/mysql
 EOF
 
   chmod 600 /root/.my.cnf
@@ -285,7 +301,9 @@ cat > /etc/init.d/seafile-server <<'EOF'
 # Author: Alexander Jackson <alexander.jackson@seafile.com.de>
 
 # Change the value of "seafile_dir" to your path of seafile installation
-seafile_dir=/opt/seafile
+EOF
+echo "seafile_dir=${OPT_ROOT}/seafile" >> /etc/init.d/seafile-server
+cat >> /etc/init.d/seafile-server <<'EOF'
 script_path=${seafile_dir}/seafile-server-latest
 seafile_init_log=${seafile_dir}/logs/seafile.init.log
 seahub_init_log=${seafile_dir}/logs/seahub.init.log
@@ -332,12 +350,12 @@ update-rc.d seafile-server defaults
 # -------------------------------------------
 # Seafile
 # -------------------------------------------
-mkdir -p /opt/seafile/installed
-cd /opt/seafile/
-if ! is_pro && [[ ! -e /opt/${SEAFILE_SERVER_PACKAGE} ]]; then
+mkdir -p ${OPT_ROOT}/seafile/installed
+cd ${OPT_ROOT}/seafile/
+if ! is_pro && [[ ! -e ${OPT_ROOT}/${SEAFILE_SERVER_PACKAGE} ]]; then
     curl -OL ${SEAFILE_SERVER_PACKAGE_URL}
 else
-    cp /opt/${SEAFILE_SERVER_PACKAGE} .
+    cp ${OPT_ROOT}/${SEAFILE_SERVER_PACKAGE} .
 fi
 tar xzf ${SEAFILE_SERVER_PACKAGE}
 
@@ -347,24 +365,24 @@ mv ${SEAFILE_SERVER_PACKAGE} installed
 # -------------------------------------------
 # Seafile DB
 # -------------------------------------------
-if [[ -f "/opt/seafile.my.cnf" ]] ;
+if [[ -f "${OPT_ROOT}/seafile.my.cnf" ]] ;
 then
   echo "MariaDB installed before, skip this part"
-  SQLSEAFILEPW=`sed -n 's/password=//p' /opt/seafile.my.cnf`
+  SQLSEAFILEPW=`sed -n 's/password=//p' ${OPT_ROOT}/seafile.my.cnf`
 else
   SQLSEAFILEPW=$(pwgen)
 
-  cat > /opt/seafile.my.cnf <<EOF
+  cat > ${OPT_ROOT}/seafile.my.cnf <<EOF
 [client]
 user=seafile
 password=$SQLSEAFILEPW
 EOF
 
-  chmod 600 /opt/seafile.my.cnf
+  chmod 600 ${OPT_ROOT}/seafile.my.cnf
 fi
 
 # -------------------------------------------
-# Go to /opt/seafile/seafile-pro-server-${SEAFILE_VERSION}
+# Go to ${OPT_ROOT}/seafile/seafile-pro-server-${SEAFILE_VERSION}
 # -------------------------------------------
 cd $INSTALLPATH
 
@@ -374,10 +392,10 @@ cd $INSTALLPATH
 TOPDIR=$(dirname "${INSTALLPATH}")
 DEFAULT_CONF_DIR=${TOPDIR}/conf
 
-if [[ ! -e /${ZPOOL_NAME}/${ZFS_DATASET}/seafile-data ]]; then
-   SEAFILE_DATA_DIR=/${ZPOOL_NAME}/${ZFS_DATASET}/seafile-data
+if [[ ! -e /${INSTALL_ROOT}/seafile-data ]]; then
+   SEAFILE_DATA_DIR=/${INSTALL_ROOT}/seafile-data
 else
-   SEAFILE_DATA_DIR=/${ZPOOL_NAME}/${ZFS_DATASET}/seafile-data`date +%Y%m%d%H%M%S`
+   SEAFILE_DATA_DIR=/${INSTALL_ROOT}/seafile-data`date +%Y%m%d%H%M%S`
 fi
 DEST_SETTINGS_PY=${TOPDIR}/conf/seahub_settings.py
 
@@ -492,7 +510,7 @@ cat > ${TOPDIR}/aio_seafile-server.log<<EOF
 
   Seafile Data Dir:    ${SEAFILE_DATA_DIR}
 
-  Seafile DB Credentials:  Check /opt/seafile.my.cnf
+  Seafile DB Credentials:  Check ${OPT_ROOT}/seafile.my.cnf
   Root DB Credentials:     Check /root/.my.cnf
 
   This report is also saved to ${TOPDIR}/aio_seafile-server.log
